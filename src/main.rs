@@ -1,20 +1,14 @@
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
-    io::Read,
+    io::BufRead,
 };
-
-/*
- * Allowing this crate because it's a compile time constant and is required
- * for testing across different machines.
- */
-const ONE_BILLION: usize = 1000000000;
 
 #[derive(Debug, Default)]
 struct Measurement {
-    min: f32,
-    max: f32,
-    sum: f32,
+    min: f64,
+    max: f64,
+    sum: f64,
     count: u32,
 }
 
@@ -25,23 +19,23 @@ impl Display for Measurement {
             "{:.1}/{:.1}/{:.1}",
             self.min,
             self.max,
-            self.sum / self.count as f32
+            self.sum / self.count as f64
         )
     }
 }
 
-fn round_towards_positive(mut n: f32) -> f32 {
-    n = (n * 10f32).round() / 10f32;
+fn round_towards_positive(mut n: f64) -> f64 {
+    n = (n * 10.0).round() / 10.0;
 
-    if n < 0f32 {
-        n += 1f32;
+    if n < 0.0 {
+        n += 1.0;
     }
 
     n
 }
 
-fn process_lines<'a>(contents: &'a str) -> HashMap<&'a str, Measurement> {
-    let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
+fn process_lines(contents: String) -> HashMap<String, Measurement> {
+    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
 
     contents.lines().for_each(|line| {
         let (city, measurement) = line.split_once(';').unwrap_or_else(|| {
@@ -51,7 +45,7 @@ fn process_lines<'a>(contents: &'a str) -> HashMap<&'a str, Measurement> {
             panic!("Failed to parse measurement: {}, {:?}", measurement, e);
         }));
 
-        let item = measurements.entry(city).or_default();
+        let item = measurements.entry(city.to_string()).or_default();
         item.min = item.min.min(measurement);
         item.max = item.max.max(measurement);
         item.sum += measurement;
@@ -61,36 +55,34 @@ fn process_lines<'a>(contents: &'a str) -> HashMap<&'a str, Measurement> {
     measurements
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let available_parallelism: usize = std::thread::available_parallelism()?.into();
 
     println!("Parallelism: {}", available_parallelism);
 
-    let file = std::fs::File::open("measurements.txt");
-    let mut reader = std::io::BufReader::new(file?);
-    let mut contents = String::with_capacity(ONE_BILLION);
-    let _ = reader.read_to_string(&mut contents);
-    let contents: &'static str = contents.leak();
-    let chunk_size = contents.len() / available_parallelism;
-    let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
-
-    let mut ptr = 0;
-    let mut end = chunk_size;
+    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
+    let file = std::fs::File::open("measurements.txt")?;
+    let file_size: usize = file.metadata()?.len().try_into()?;
+    let chunk_size = file_size / available_parallelism;
+    let mut reader = std::io::BufReader::with_capacity(chunk_size, file);
 
     let handles = (0..available_parallelism)
         .map(|_| {
-            if end > contents.len() {
-                println!("EOF");
-                end = contents.len();
+            let mut buf = Vec::with_capacity(chunk_size);
+            let bytes = reader.fill_buf().expect("Failed to read into buffer");
+            buf.extend_from_slice(bytes);
+
+            if !buf.ends_with(&[b'\n']) {
+                reader
+                    .read_until(b'\n', &mut buf)
+                    .expect("Failed to read until newline");
             }
 
-            let newline = contents[ptr..end].rfind('\n').unwrap() + ptr;
-            let slice = &contents[ptr..newline];
+            println!("Read {} bytes", buf.len());
 
-            ptr = newline + 1;
-            end = ptr + chunk_size;
+            let buf = String::from_utf8(buf).expect("Failed to convert buffer to string");
 
-            std::thread::spawn(move || process_lines(slice))
+            std::thread::spawn(move || process_lines(buf))
         })
         .collect::<Vec<_>>();
 
@@ -106,13 +98,13 @@ fn main() -> std::io::Result<()> {
         }
     }
 
-    let mut results = Vec::<(&str, Measurement)>::with_capacity(10000);
+    let mut results = Vec::<(String, Measurement)>::with_capacity(10000);
 
     for (city, measurement) in measurements {
         results.push((city, measurement));
     }
 
-    results.sort_by(|a, b| a.0.cmp(b.0));
+    results.sort_by(|a, b| a.0.cmp(&b.0));
 
     print!("{{");
     results.iter().for_each(|(city, measurement)| {
