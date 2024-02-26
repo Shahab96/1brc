@@ -58,25 +58,16 @@ fn process_lines<'a>(contents: &'a str) -> HashMap<&'a str, Measurement> {
 }
 
 fn main() -> std::io::Result<()> {
-    let cores = std::process::Command::new("nproc")
-        .output()
-        .expect("Failed to get number of cores")
-        .stdout;
+    let available_parallelism: usize = std::thread::available_parallelism()?.into();
 
-    let cores = String::from_utf8(cores)
-        .expect("Failed to parse number of cores")
-        .trim()
-        .parse::<usize>()
-        .expect("Failed to parse number of cores");
-
-    println!("{} cores", cores);
+    println!("Parallelism: {}", available_parallelism);
 
     let file = std::fs::File::open("measurements.txt");
     let mut reader = std::io::BufReader::new(file?);
     let mut contents = String::with_capacity(ONE_BILLION);
     let _ = reader.read_to_string(&mut contents);
     let contents: &'static str = contents.leak();
-    let chunk_size = contents.len() / cores;
+    let chunk_size = contents.len() / available_parallelism;
     let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
 
     let mut ptr = 0;
@@ -84,7 +75,7 @@ fn main() -> std::io::Result<()> {
     println!("Beginning processing");
 
     let start = std::time::Instant::now();
-    let handles = (0..cores)
+    let handles = (0..available_parallelism)
         .map(|_| {
             if end > contents.len() {
                 println!("EOF");
