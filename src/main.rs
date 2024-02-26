@@ -72,9 +72,7 @@ fn main() -> std::io::Result<()> {
 
     let mut ptr = 0;
     let mut end = chunk_size;
-    println!("Beginning processing");
 
-    let start = std::time::Instant::now();
     let handles = (0..available_parallelism)
         .map(|_| {
             if end > contents.len() {
@@ -118,8 +116,6 @@ fn main() -> std::io::Result<()> {
     });
     // Removing the trailing comma
     print!("\x08}}");
-
-    println!("Processing took: {:?}", start.elapsed());
 
     Ok(())
 }
