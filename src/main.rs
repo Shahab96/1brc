@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fmt::Display, io::Read};
+use std::{
+    collections::HashMap,
+    fmt::{Display, Formatter},
+    io::Read,
+};
 
 /*
  * Allowing this crate because it's a compile time constant and is required
@@ -15,7 +19,7 @@ struct Measurement {
 }
 
 impl Display for Measurement {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
             "{:.1}/{:.1}/{:.1}",
@@ -33,7 +37,7 @@ fn round_towards_positive(mut n: f32) -> f32 {
         n += 1f32;
     }
 
-    format!("{:.1}", n).parse().unwrap()
+    n
 }
 
 fn process_lines<'a>(contents: &'a str) -> HashMap<&'a str, Measurement> {
