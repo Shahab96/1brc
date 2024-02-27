@@ -4,6 +4,13 @@ use std::{
     io::BufRead,
 };
 
+// Flip this around to see performance differences on different machines
+// Don't go too high! You'll start getting pointer overlap problems!
+// Increasing reduces memory usage, but also reduces cpu saturation
+// Decreasinve increases memory usage, but also increases cpu saturation
+// Use 1 to fully saturate the cpu
+const PARALLELISM_CONSTANT: usize = 1;
+
 #[derive(Debug, Default)]
 struct Measurement {
     min: f64,
@@ -56,35 +63,47 @@ fn process_lines(contents: String) -> HashMap<String, Measurement> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let available_parallelism: usize = std::thread::available_parallelism()?.into();
+    let available_parallelism = std::thread::available_parallelism().unwrap().get();
 
-    println!("Parallelism: {}", available_parallelism);
+    println!(
+        "Parallelism: {} with parallelism multiplier: {}",
+        available_parallelism, PARALLELISM_CONSTANT
+    );
 
-    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
-    let file = std::fs::File::open("measurements.txt")?;
-    let file_size: usize = file.metadata()?.len().try_into()?;
+    let available_parallelism = available_parallelism * PARALLELISM_CONSTANT;
+
+    let file = std::fs::File::open("measurements.txt").unwrap();
+
+    // Tell the compiler to treat the output as a usize
+    // This allows us to avoid runtime type conversion.
+    let file_size = file.metadata()?.len() as usize;
+
     let chunk_size = file_size / available_parallelism;
+
     let mut reader = std::io::BufReader::with_capacity(chunk_size, file);
 
     let handles = (0..available_parallelism)
         .map(|_| {
             let mut buf = Vec::with_capacity(chunk_size);
-            let bytes = reader.fill_buf().expect("Failed to read into buffer");
+            let bytes = reader.fill_buf().unwrap();
             buf.extend_from_slice(bytes);
 
             if !buf.ends_with(&[b'\n']) {
-                reader
-                    .read_until(b'\n', &mut buf)
-                    .expect("Failed to read until newline");
+                // Discard the result to prevent branching
+                let _ = reader.read_until(b'\n', &mut buf);
             }
 
             println!("Read {} bytes", buf.len());
 
-            let buf = String::from_utf8(buf).expect("Failed to convert buffer to string");
+            let buf = String::from_utf8(buf).unwrap();
 
             std::thread::spawn(move || process_lines(buf))
         })
         .collect::<Vec<_>>();
+
+    // Perform memory allocation while waiting for the threads to finish
+    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
+    let mut results = Vec::<(String, Measurement)>::with_capacity(10000);
 
     for handle in handles {
         let result = handle.join().unwrap();
@@ -97,8 +116,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             item.count += measurement.count;
         }
     }
-
-    let mut results = Vec::<(String, Measurement)>::with_capacity(10000);
 
     for (city, measurement) in measurements {
         results.push((city, measurement));
