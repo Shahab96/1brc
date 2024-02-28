@@ -11,12 +11,28 @@ use std::{
 // Use 1 to fully saturate the cpu
 const PARALLELISM_CONSTANT: usize = 1;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 struct Measurement {
     min: f64,
     max: f64,
     sum: f64,
     count: u32,
+}
+
+impl Measurement {
+    fn record(&mut self, measurement: f64) {
+        self.min = self.min.min(measurement);
+        self.max = self.max.max(measurement);
+        self.sum += measurement;
+        self.count += 1;
+    }
+
+    fn aggregate(&mut self, other: &Measurement) {
+        self.min = self.min.min(other.min);
+        self.max = self.max.max(other.max);
+        self.sum += other.sum;
+        self.count += other.count;
+    }
 }
 
 impl Display for Measurement {
@@ -41,8 +57,9 @@ fn round_towards_positive(mut n: f64) -> f64 {
     n
 }
 
-fn process_lines(contents: String) -> HashMap<String, Measurement> {
-    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
+fn process_lines(contents: &'static str) -> HashMap<&'static str, Measurement> {
+    let start = std::time::Instant::now();
+    let mut measurements = HashMap::<&'static str, Measurement>::with_capacity(10000);
 
     contents.lines().for_each(|line| {
         let (city, measurement) = line.split_once(';').unwrap_or_else(|| {
@@ -52,18 +69,26 @@ fn process_lines(contents: String) -> HashMap<String, Measurement> {
             panic!("Failed to parse measurement: {}, {:?}", measurement, e);
         }));
 
-        let item = measurements.entry(city.to_string()).or_default();
-        item.min = item.min.min(measurement);
-        item.max = item.max.max(measurement);
-        item.sum += measurement;
-        item.count += 1;
+        measurements
+            .entry(city)
+            .and_modify(|m| m.record(measurement))
+            .or_default();
     });
 
+    println!(
+        "Thread {} processed in {:?}",
+        std::thread::current().name().unwrap(),
+        start.elapsed()
+    );
     measurements
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let available_parallelism = std::thread::available_parallelism().unwrap().get();
+    /*
+     * We subtract 1 to prevent the main thread from being used. This lets us use the main thread to perform aggregation
+     * while the other threads are processing the file.
+     */
+    let available_parallelism = std::thread::available_parallelism().unwrap().get() - 1;
 
     println!(
         "Parallelism: {} with parallelism multiplier: {}",
@@ -74,8 +99,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = std::fs::File::open("measurements.txt").unwrap();
 
-    // Tell the compiler to treat the output as a usize
-    // This allows us to avoid runtime type conversion.
+    /*
+     * Tell the compiler to treat the output as a usize
+     * This allows us to avoid runtime type conversion.
+     */
     let file_size = file.metadata()?.len() as usize;
 
     let chunk_size = file_size / available_parallelism;
@@ -83,7 +110,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = std::io::BufReader::with_capacity(chunk_size, file);
 
     let handles = (0..available_parallelism)
-        .map(|_| {
+        .map(|thread_count| {
+            let start = std::time::Instant::now();
             let mut buf = Vec::with_capacity(chunk_size);
             let bytes = reader.fill_buf().unwrap();
             buf.extend_from_slice(bytes);
@@ -93,32 +121,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = reader.read_until(b'\n', &mut buf);
             }
 
-            println!("Read {} bytes", buf.len());
+            println!("Read {} bytes in {:?}", buf.len(), start.elapsed());
 
-            let buf = String::from_utf8(buf).unwrap();
+            let buf = String::from_utf8(buf).unwrap().leak();
 
-            std::thread::spawn(move || process_lines(buf))
+            std::thread::Builder::new()
+                .name(format!("worker-{}", thread_count))
+                .spawn(move || process_lines(buf))
+                .unwrap()
         })
         .collect::<Vec<_>>();
 
     // Perform memory allocation while waiting for the threads to finish
-    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
-    let mut results = Vec::<(String, Measurement)>::with_capacity(10000);
+    let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
+
+    // Put it on the stack!
+    let mut results = [("", Measurement::default()); 10000];
 
     for handle in handles {
         let result = handle.join().unwrap();
 
+        // While we're waiting for the threads to finish, we can perform the aggregation
         for (city, measurement) in result {
-            let item = measurements.entry(city).or_default();
-            item.min = measurement.min.min(measurement.min);
-            item.max = measurement.max.max(measurement.max);
-            item.sum += measurement.sum;
-            item.count += measurement.count;
+            measurements
+                .entry(city)
+                .and_modify(|m| m.aggregate(&measurement))
+                .or_insert(measurement);
         }
     }
 
-    for (city, measurement) in measurements {
-        results.push((city, measurement));
+    for (idx, (city, measurement)) in measurements.iter().enumerate() {
+        results[idx] = (city, *measurement);
     }
 
     results.sort_by(|a, b| a.0.cmp(&b.0));
