@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
      * We subtract 1 to prevent the main thread from being used. This lets us use the main thread to perform aggregation
      * while the other threads are processing the file.
      */
-    let available_parallelism = std::thread::available_parallelism().unwrap().get() - 1;
+    let available_parallelism = std::thread::available_parallelism().unwrap().get();
 
     println!(
         "Parallelism: {} with parallelism multiplier: {}",
