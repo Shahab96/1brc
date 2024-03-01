@@ -1,7 +1,8 @@
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
-    io::{BufRead, BufWriter, Write},
+    fs::File,
+    io::{BufRead, BufReader, BufWriter, Write},
 };
 
 // Flip this around to see performance differences on different machines
@@ -102,7 +103,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let available_parallelism = available_parallelism * PARALLELISM_CONSTANT;
 
-    let file = std::fs::File::open("measurements.txt").unwrap();
+    let file = File::open("measurements.txt").unwrap();
 
     /*
      * Tell the compiler to treat the output as a usize
@@ -112,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let chunk_size = file_size / available_parallelism;
 
-    let mut reader = std::io::BufReader::with_capacity(chunk_size, file);
+    let mut reader = BufReader::with_capacity(chunk_size, file);
 
     let handles = (0..available_parallelism)
         .map(|thread_count| {
