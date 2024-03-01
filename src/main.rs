@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
-    io::BufRead,
+    io::{BufRead, BufWriter, Write},
 };
 
 // Flip this around to see performance differences on different machines
@@ -20,6 +20,7 @@ struct Measurement {
 }
 
 impl Measurement {
+    #[inline(always)]
     fn record(&mut self, measurement: f64) {
         self.min = self.min.min(measurement);
         self.max = self.max.max(measurement);
@@ -27,6 +28,7 @@ impl Measurement {
         self.count += 1;
     }
 
+    #[inline(always)]
     fn aggregate(&mut self, other: &Measurement) {
         self.min = self.min.min(other.min);
         self.max = self.max.max(other.max);
@@ -36,6 +38,7 @@ impl Measurement {
 }
 
 impl Display for Measurement {
+    #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -47,6 +50,7 @@ impl Display for Measurement {
     }
 }
 
+#[inline(always)]
 fn round_towards_positive(mut n: f64) -> f64 {
     n = (n * 10.0).round() / 10.0;
 
@@ -57,11 +61,12 @@ fn round_towards_positive(mut n: f64) -> f64 {
     n
 }
 
+#[inline(always)]
 fn process_lines(contents: &'static str) -> HashMap<&'static str, Measurement> {
     let start = std::time::Instant::now();
     let mut measurements = HashMap::<&'static str, Measurement>::with_capacity(10000);
 
-    contents.lines().for_each(|line| {
+    for line in contents.lines() {
         let (city, measurement) = line.split_once(';').unwrap_or_else(|| {
             panic!("Failed to parse line: {}", line);
         });
@@ -73,7 +78,7 @@ fn process_lines(contents: &'static str) -> HashMap<&'static str, Measurement> {
             .entry(city)
             .and_modify(|m| m.record(measurement))
             .or_default();
-    });
+    }
 
     println!(
         "Thread {} processed in {:?}",
@@ -154,14 +159,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         results[idx] = (city, *measurement);
     }
 
-    results.sort_by(|a, b| a.0.cmp(&b.0));
+    results.sort_by(|a, b| a.0.cmp(b.0));
 
-    print!("{{");
-    results.iter().for_each(|(city, measurement)| {
-        print!("{}={},", city, measurement);
-    });
+    // Create a buffer to write to stdout, this is faster than writing to stdout directly
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    let mut writer = BufWriter::new(&mut handle);
+
+    // Write the buffer to stdout
+    writer.write(b"{").unwrap();
+    for (city, measurement) in results {
+        writer
+            .write_fmt(format_args!("{}={},", city, measurement))
+            .unwrap();
+    }
     // Removing the trailing comma
-    print!("\x08}}");
+    writer.write(b"\x08}").unwrap();
+    writer.flush().unwrap();
 
     Ok(())
 }
