@@ -1,8 +1,11 @@
 use std::{
+    borrow::Cow,
     collections::HashMap,
     fmt::{Display, Formatter},
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
+    os::unix::fs::OpenOptionsExt,
+    time::Instant,
 };
 
 // Flip this around to see performance differences on different machines
@@ -63,8 +66,10 @@ fn round_towards_positive(mut n: f64) -> f64 {
 }
 
 #[inline(always)]
-fn process_lines(contents: &'static str) -> HashMap<&'static str, Measurement> {
-    let start = std::time::Instant::now();
+fn process_lines(contents: Vec<u8>, start: Instant) -> HashMap<&'static str, Measurement> {
+    println!("Read {} bytes in {:?}", contents.len(), start.elapsed());
+    let contents = std::str::from_utf8(contents.leak()).unwrap();
+    let measurement_template = Cow::Owned(Measurement::default());
     let mut measurements = HashMap::<&'static str, Measurement>::with_capacity(10000);
 
     for line in contents.lines() {
@@ -75,10 +80,12 @@ fn process_lines(contents: &'static str) -> HashMap<&'static str, Measurement> {
             panic!("Failed to parse measurement: {}, {:?}", measurement, e);
         }));
 
-        measurements
-            .entry(city)
-            .and_modify(|m| m.record(measurement))
-            .or_default();
+        let Some(item) = measurements.get_mut(city) else {
+            measurements.insert(city, *measurement_template);
+            continue;
+        };
+
+        item.record(measurement);
     }
 
     println!(
@@ -91,8 +98,7 @@ fn process_lines(contents: &'static str) -> HashMap<&'static str, Measurement> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
-     * We subtract 1 to prevent the main thread from being used. This lets us use the main thread to perform aggregation
-     * while the other threads are processing the file.
+     * Get the number of available cores on the machine
      */
     let available_parallelism = std::thread::available_parallelism().unwrap().get();
 
@@ -103,7 +109,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let available_parallelism = available_parallelism * PARALLELISM_CONSTANT;
 
-    let file = File::open("measurements.txt").unwrap();
+    let file = File::options()
+        .read(true)
+        .mode(16384)
+        .open("measurements.txt")
+        .unwrap();
 
     /*
      * Tell the compiler to treat the output as a usize
@@ -118,22 +128,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handles = (0..available_parallelism)
         .map(|thread_count| {
             let start = std::time::Instant::now();
-            let mut buf = Vec::with_capacity(chunk_size);
+            let mut buf = Vec::with_capacity(chunk_size + 100);
             let bytes = reader.fill_buf().unwrap();
             buf.extend_from_slice(bytes);
 
-            if !buf.ends_with(&[b'\n']) {
-                // Discard the result to prevent branching
-                let _ = reader.read_until(b'\n', &mut buf);
+            if buf.last() != Some(&b'\n') {
+                reader.read_until(b'\n', &mut buf).unwrap();
             }
-
-            println!("Read {} bytes in {:?}", buf.len(), start.elapsed());
-
-            let buf = String::from_utf8(buf).unwrap().leak();
 
             std::thread::Builder::new()
                 .name(format!("worker-{}", thread_count))
-                .spawn(move || process_lines(buf))
+                .spawn(move || process_lines(buf, start))
                 .unwrap()
         })
         .collect::<Vec<_>>();
