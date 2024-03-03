@@ -1,3 +1,6 @@
+#![feature(rustc_private)]
+extern crate libc;
+
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -5,7 +8,6 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::fs::OpenOptionsExt,
-    time::Instant,
 };
 
 // Flip this around to see performance differences on different machines
@@ -56,18 +58,21 @@ impl Display for Measurement {
 
 #[inline(always)]
 fn round_towards_positive(mut n: f64) -> f64 {
-    n = (n * 10.0).round() / 10.0;
-
+    // Check if n is negative and needs special handling
     if n < 0.0 {
-        n += 1.0;
+        // For negative numbers, we adjust the logic to ensure we are "rounding towards positive"
+        // We invert the number, perform the rounding, and then invert it back
+        n = -((-n * 10.0).ceil() / 10.0);
+    } else {
+        // For positive numbers, we just apply the ceiling after scaling
+        n = (n * 10.0).ceil() / 10.0;
     }
 
     n
 }
 
 #[inline(always)]
-fn process_lines(contents: Vec<u8>, start: Instant) -> HashMap<&'static str, Measurement> {
-    println!("Read {} bytes in {:?}", contents.len(), start.elapsed());
+fn process_lines(contents: Vec<u8>) -> HashMap<&'static str, Measurement> {
     let contents = std::str::from_utf8(contents.leak()).unwrap();
     let measurement_template = Cow::Owned(Measurement::default());
     let mut measurements = HashMap::<&'static str, Measurement>::with_capacity(10000);
@@ -88,11 +93,6 @@ fn process_lines(contents: Vec<u8>, start: Instant) -> HashMap<&'static str, Mea
         item.record(measurement);
     }
 
-    println!(
-        "Thread {} processed in {:?}",
-        std::thread::current().name().unwrap(),
-        start.elapsed()
-    );
     measurements
 }
 
@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let file = File::options()
         .read(true)
-        .mode(16384)
+        .mode(libc::O_DIRECT as u32)
         .open("measurements.txt")
         .unwrap();
 
@@ -127,7 +127,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let handles = (0..available_parallelism)
         .map(|thread_count| {
-            let start = std::time::Instant::now();
             let mut buf = Vec::with_capacity(chunk_size + 100);
             let bytes = reader.fill_buf().unwrap();
             buf.extend_from_slice(bytes);
@@ -138,7 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             std::thread::Builder::new()
                 .name(format!("worker-{}", thread_count))
-                .spawn(move || process_lines(buf, start))
+                .spawn(move || process_lines(buf))
                 .unwrap()
         })
         .collect::<Vec<_>>();
