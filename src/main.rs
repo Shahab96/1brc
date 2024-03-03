@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader, BufWriter, Write},
     os::unix::fs::OpenOptionsExt,
+    time::Instant,
 };
 
 // Flip this around to see performance differences on different machines
@@ -72,15 +73,15 @@ fn round_towards_positive(mut n: f64) -> f64 {
 }
 
 #[inline(always)]
-fn process_lines(contents: Vec<u8>) -> HashMap<&'static str, Measurement> {
-    let contents = std::str::from_utf8(contents.leak()).unwrap();
+fn process_lines(contents: String) -> HashMap<&'static str, Measurement> {
+    let start = Instant::now();
+    let contents = contents.leak();
     let measurement_template = Cow::Owned(Measurement::default());
     let mut measurements = HashMap::<&'static str, Measurement>::with_capacity(10000);
 
     for line in contents.lines() {
-        let (city, measurement) = line.split_once(';').unwrap_or_else(|| {
-            panic!("Failed to parse line: {}", line);
-        });
+        let (city, measurement) = line.split_once(';').unzip();
+        let (city, measurement) = (city.unwrap(), measurement.unwrap());
         let measurement = round_towards_positive(measurement.parse().unwrap_or_else(|e| {
             panic!("Failed to parse measurement: {}, {:?}", measurement, e);
         }));
@@ -93,6 +94,11 @@ fn process_lines(contents: Vec<u8>) -> HashMap<&'static str, Measurement> {
         item.record(measurement);
     }
 
+    println!(
+        "Processed {} lines in {:?}",
+        contents.lines().count(),
+        start.elapsed()
+    );
     measurements
 }
 
@@ -126,19 +132,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = BufReader::with_capacity(chunk_size, file);
 
     let handles = (0..available_parallelism)
-        .map(|thread_count| {
+        .map(|_| {
+            let start = Instant::now();
             let mut buf = Vec::with_capacity(chunk_size + 100);
             let bytes = reader.fill_buf().unwrap();
             buf.extend_from_slice(bytes);
+            let mut buf = unsafe { String::from_utf8_unchecked(buf) };
+            reader.read_line(&mut buf).unwrap();
 
-            if buf.last() != Some(&b'\n') {
-                reader.read_until(b'\n', &mut buf).unwrap();
-            }
+            println!("Read {} bytes in {:?}", buf.len(), start.elapsed());
 
-            std::thread::Builder::new()
-                .name(format!("worker-{}", thread_count))
-                .spawn(move || process_lines(buf))
-                .unwrap()
+            std::thread::spawn(move || process_lines(buf))
         })
         .collect::<Vec<_>>();
 
