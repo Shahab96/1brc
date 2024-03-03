@@ -1,8 +1,7 @@
-#![feature(rustc_private)]
+#![feature(rustc_private, vec_push_within_capacity)]
 extern crate libc;
 
 use std::{
-    borrow::Cow,
     collections::HashMap,
     fmt::{Display, Formatter},
     fs::File,
@@ -18,7 +17,7 @@ use std::{
 // Use 1 to fully saturate the cpu
 const PARALLELISM_CONSTANT: usize = 1;
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Default, Clone, Copy)]
 struct Measurement {
     min: f64,
     max: f64,
@@ -29,18 +28,49 @@ struct Measurement {
 impl Measurement {
     #[inline(always)]
     fn record(&mut self, measurement: f64) {
-        self.min = self.min.min(measurement);
-        self.max = self.max.max(measurement);
+        if measurement < self.min {
+            self.min = measurement;
+        }
+
+        if measurement > self.max {
+            self.max = measurement;
+        }
+
         self.sum += measurement;
         self.count += 1;
     }
 
     #[inline(always)]
     fn aggregate(&mut self, other: &Measurement) {
-        self.min = self.min.min(other.min);
-        self.max = self.max.max(other.max);
+        if other.min < self.min {
+            self.min = other.min;
+        }
+
+        if other.max > self.max {
+            self.max = other.max;
+        }
+
         self.sum += other.sum;
         self.count += other.count;
+    }
+}
+
+impl From<f64> for Measurement {
+    #[inline(always)]
+    fn from(measurement: f64) -> Self {
+        Self {
+            min: measurement,
+            max: measurement,
+            sum: measurement,
+            count: 1,
+        }
+    }
+}
+
+impl std::fmt::Debug for Measurement {
+    #[inline(always)]
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -59,13 +89,11 @@ impl Display for Measurement {
 
 #[inline(always)]
 fn round_towards_positive(mut n: f64) -> f64 {
-    // Check if n is negative and needs special handling
     if n < 0.0 {
         // For negative numbers, we adjust the logic to ensure we are "rounding towards positive"
         // We invert the number, perform the rounding, and then invert it back
         n = -((-n * 10.0).ceil() / 10.0);
     } else {
-        // For positive numbers, we just apply the ceiling after scaling
         n = (n * 10.0).ceil() / 10.0;
     }
 
@@ -73,33 +101,47 @@ fn round_towards_positive(mut n: f64) -> f64 {
 }
 
 #[inline(always)]
-fn process_lines(contents: String) -> HashMap<&'static str, Measurement> {
+fn parse_line<'a>(line: &'a str) -> (&'a str, f64) {
+    for character in line.char_indices().rev() {
+        if character.1.eq(&';') {
+            let (city, measurement) = line.split_at(character.0);
+
+            return (
+                city,
+                round_towards_positive(measurement[1..].parse().unwrap()),
+            );
+        }
+    }
+
+    // We know that the input is well formed, so this is unreachable
+    unreachable!()
+}
+
+#[inline(always)]
+fn process_lines(contents: String) -> impl Iterator<Item = (String, Measurement)> {
     let start = Instant::now();
     let contents = contents.leak();
-    let measurement_template = Cow::Owned(Measurement::default());
-    let mut measurements = HashMap::<&'static str, Measurement>::with_capacity(10000);
+    let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
 
     for line in contents.lines() {
-        let (city, measurement) = line.split_once(';').unzip();
-        let (city, measurement) = (city.unwrap(), measurement.unwrap());
-        let measurement = round_towards_positive(measurement.parse().unwrap_or_else(|e| {
-            panic!("Failed to parse measurement: {}, {:?}", measurement, e);
-        }));
+        let (city, measurement) = parse_line(line);
 
         let Some(item) = measurements.get_mut(city) else {
-            measurements.insert(city, *measurement_template);
+            measurements.insert(city, Measurement::from(measurement));
             continue;
         };
 
         item.record(measurement);
     }
 
+    measurements.shrink_to_fit();
+
     println!(
         "Processed {} lines in {:?}",
         contents.lines().count(),
         start.elapsed()
     );
-    measurements
+    measurements.into_iter().map(|(k, v)| (k.to_string(), v))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -147,28 +189,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
 
     // Perform memory allocation while waiting for the threads to finish
-    let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
-
-    // Put it on the stack!
-    let mut results = [("", Measurement::default()); 10000];
+    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
+    let mut results = Vec::<(String, Measurement)>::with_capacity(10000);
 
     for handle in handles {
         let result = handle.join().unwrap();
 
         // While we're waiting for the threads to finish, we can perform the aggregation
         for (city, measurement) in result {
-            measurements
-                .entry(city)
-                .and_modify(|m| m.aggregate(&measurement))
-                .or_insert(measurement);
+            let Some(item) = measurements.get_mut(&city) else {
+                measurements.insert(city, measurement);
+                continue;
+            };
+
+            item.aggregate(&measurement);
         }
     }
 
-    for (idx, (city, measurement)) in measurements.iter().enumerate() {
-        results[idx] = (city, *measurement);
+    for measurement in measurements.into_iter() {
+        results.push_within_capacity(measurement).unwrap();
     }
 
-    results.sort_by(|a, b| a.0.cmp(b.0));
+    results.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Create a buffer to write to stdout, this is faster than writing to stdout directly
     let stdout = std::io::stdout();
