@@ -148,8 +148,6 @@ fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measure
         line_count += 1;
     }
 
-    measurements.shrink_to_fit();
-
     println!("Processed {} lines in {:?}", line_count, start.elapsed());
     measurements.into_iter()
 }
