@@ -202,11 +202,14 @@ fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
 #[inline(always)]
 fn process_mapped_lines<'a>(start: i64, end: i64) -> impl Iterator<Item = (&'a str, Measurement)> {
     let chunk_size = (end - start) as usize;
+    let mut buf = Vec::with_capacity(chunk_size);
+
     let beginning = Instant::now();
+
     let mut file = File::options().read(true).open("measurements.txt").unwrap();
     file.seek(SeekFrom::Start(start as u64)).unwrap();
     let mut take = file.take(chunk_size as u64);
-    let mut buf = Vec::with_capacity(chunk_size);
+
     take.read_to_end(&mut buf).unwrap();
 
     // We know that the input is all valid utf8, so we can use unsafe to avoid the overhead of checking.
