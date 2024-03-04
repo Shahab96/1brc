@@ -12,11 +12,21 @@ use std::{
     time::Instant,
 };
 
-// Flip this around to see performance differences on different machines
-// Don't go too high! You'll start getting pointer overlap problems!
-// Increasing reduces memory usage, but also reduces cpu saturation
-// Decreasinve increases memory usage, but also increases cpu saturation
-// Use 1 to fully saturate the cpu
+/* Flip this around to see performance differences on different machines
+ * Don't go too high! You'll start getting pointer overlap problems!
+ * Use 1 to evenly distribute the data across your cores.
+ *
+ * This is a constant, so the compiler will optimize it out
+ * However, know that as you decrease this number, you will have threads that finish and
+ * simply spin down. So as you continue to process your chunks a lot of cpu time is wasted.
+ * It's useful to increase this and check what the best value is for your machine.
+ *
+ * As you increase this value, the chunks will be smaller, and the threads will finish faster.
+ * However since you are using more threads than the number of cores you have, it is very likely
+ * that one of your cores will simply grab a thread from the cpu scheduler and dedicate itself to that.
+ * This means that you will overall waste less cpu time, however if you end up processing faster
+ * than you read, then you will still be bottlenecked by IO.
+ */
 const PARALLELISM_CONSTANT: usize = 1;
 
 #[derive(Default, Clone, Copy)]
