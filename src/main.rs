@@ -1,4 +1,6 @@
-#![feature(rustc_private, vec_push_within_capacity)]
+#![feature(rustc_private)]
+// We're using Direct I/O to bypass the kernel's page cache, this is a performance optimization.
+// But we need to use the libc crate to get access to the O_DIRECT flag, to set the mode of the file.
 extern crate libc;
 
 use std::{
@@ -118,10 +120,11 @@ fn parse_line<'a>(line: &'a str) -> (&'a str, f64) {
 }
 
 #[inline(always)]
-fn process_lines(contents: String) -> impl Iterator<Item = (String, Measurement)> {
-    let start = Instant::now();
+fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measurement)> {
     let contents = contents.leak();
     let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
+    let mut line_count = 0u32;
+    let start = Instant::now();
 
     for line in contents.lines() {
         let (city, measurement) = parse_line(line);
@@ -132,16 +135,13 @@ fn process_lines(contents: String) -> impl Iterator<Item = (String, Measurement)
         };
 
         item.record(measurement);
+        line_count += 1;
     }
 
     measurements.shrink_to_fit();
 
-    println!(
-        "Processed {} lines in {:?}",
-        contents.lines().count(),
-        start.elapsed()
-    );
-    measurements.into_iter().map(|(k, v)| (k.to_string(), v))
+    println!("Processed {} lines in {:?}", line_count, start.elapsed());
+    measurements.into_iter()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -189,8 +189,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
 
     // Perform memory allocation while waiting for the threads to finish
-    let mut measurements = HashMap::<String, Measurement>::with_capacity(10000);
-    let mut results = Vec::<(String, Measurement)>::with_capacity(10000);
+    let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
 
     for handle in handles {
         let result = handle.join().unwrap();
@@ -206,10 +205,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    for measurement in measurements.into_iter() {
-        results.push_within_capacity(measurement).unwrap();
-    }
-
+    let mut results = Vec::from_iter(measurements.iter());
     results.sort_by(|a, b| a.0.cmp(&b.0));
 
     // Create a buffer to write to stdout, this is faster than writing to stdout directly
