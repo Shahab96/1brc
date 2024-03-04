@@ -1,14 +1,8 @@
-#![feature(rustc_private)]
-// We're using Direct I/O to bypass the kernel's page cache, this is a performance optimization.
-// But we need to use the libc crate to get access to the O_DIRECT flag, to set the mode of the file.
-extern crate libc;
-
 use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Write},
-    os::unix::fs::OpenOptionsExt,
+    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     time::Instant,
 };
 
@@ -158,6 +152,72 @@ fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measure
     measurements.into_iter()
 }
 
+#[inline(always)]
+fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
+    // Open the file with Direct I/O. Windows not supported.
+    let mut file = File::open("measurements.txt").unwrap();
+
+    /*
+     * Tell the compiler to treat the output as a usize
+     * This allows us to avoid runtime type conversion.
+     */
+    let file_size = file.metadata().unwrap().len() as usize;
+    let chunk_size = file_size / available_parallelism;
+
+    let start = Instant::now();
+    let temp = &mut [0u8; 100];
+    let mut beginning = 0u64;
+    let mut mmap = Vec::with_capacity(available_parallelism);
+
+    /*
+     * We're going to seek the file chunk by chunk.
+     * At the end of each seek we read the next 100 bytes, find the first newline and
+     * treat it's index as the end of the chunk.
+     *
+     * This lets us produce a list of tuples that represent the start and end of each chunk
+     * without having to perform full file reads.
+     */
+    for _ in 0..available_parallelism {
+        file.seek(SeekFrom::Start(beginning + chunk_size as u64))
+            .unwrap();
+        file.read(temp.as_mut_slice()).unwrap();
+        let temp = std::str::from_utf8(temp).unwrap();
+        let newline = temp.find('\n').unwrap() as u64;
+        let end = newline + beginning + chunk_size as u64;
+        file.seek(SeekFrom::Start(end)).unwrap();
+
+        mmap.push((beginning as i64, end as i64));
+        beginning = end + 1;
+    }
+
+    println!(
+        "Memory mapped {} chunks in {:?}",
+        mmap.len(),
+        start.elapsed()
+    );
+
+    mmap
+}
+
+#[inline(always)]
+fn process_mapped_lines<'a>(start: i64, end: i64) -> impl Iterator<Item = (&'a str, Measurement)> {
+    let chunk_size = (end - start) as usize;
+    let file = File::options().read(true).open("measurements.txt").unwrap();
+    let beginning = Instant::now();
+    let mut buf = Vec::with_capacity(chunk_size);
+    let mut reader = BufReader::with_capacity(chunk_size, file);
+    reader.seek(SeekFrom::Start(start as u64)).unwrap();
+    let bytes = reader.fill_buf().unwrap();
+    buf.extend_from_slice(bytes);
+
+    // We know that the input is all valid utf8, so we can use unsafe to avoid the overhead of checking.
+    let buf = unsafe { String::from_utf8_unchecked(buf) };
+
+    println!("Read {} bytes in {:?}", buf.len(), beginning.elapsed());
+
+    process_lines(buf)
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
      * Get the number of available cores on the machine
@@ -169,37 +229,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         available_parallelism, PARALLELISM_CONSTANT
     );
 
-    let available_parallelism = available_parallelism * PARALLELISM_CONSTANT;
+    // Commenting this out while testing the memory map. Using a parallelism constant of 1 is
+    // required for testing to ensure that we don't end up with pointer overlap.
+    // let available_parallelism = available_parallelism * PARALLELISM_CONSTANT;
 
-    // Open the file with Direct I/O. Windows not supported.
-    let file = File::options()
-        .read(true)
-        .mode(libc::O_DIRECT as u32)
-        .open("measurements.txt")
-        .unwrap();
-
-    /*
-     * Tell the compiler to treat the output as a usize
-     * This allows us to avoid runtime type conversion.
-     */
-    let file_size = file.metadata()?.len() as usize;
-
-    let chunk_size = file_size / available_parallelism;
-
-    let mut reader = BufReader::with_capacity(chunk_size, file);
+    let mmap = memory_map(available_parallelism);
 
     let handles = (0..available_parallelism)
-        .map(|_| {
-            let start = Instant::now();
-            let mut buf = Vec::with_capacity(chunk_size + 100);
-            let bytes = reader.fill_buf().unwrap();
-            buf.extend_from_slice(bytes);
-            let mut buf = unsafe { String::from_utf8_unchecked(buf) };
-            reader.read_line(&mut buf).unwrap();
+        .map(|thread_count| {
+            /*
+             * Now that we have a map of the file, we can spawn threads to read the file
+             * chunk by chunk in parallel.
+             */
+            let (start, end) = mmap[thread_count];
 
-            println!("Read {} bytes in {:?}", buf.len(), start.elapsed());
-
-            std::thread::spawn(move || process_lines(buf))
+            std::thread::spawn(move || process_mapped_lines(start, end))
         })
         .collect::<Vec<_>>();
 
