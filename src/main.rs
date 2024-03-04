@@ -40,6 +40,19 @@ struct Measurement {
 impl Measurement {
     #[inline(always)]
     fn record(&mut self, measurement: f64) {
+        /*
+         * This may seem ridiculous, as we can just do something like
+         * ```
+         * self.min.min(other.min)
+         * ```
+         *
+         * However, this is a performance optimization. When we use the min/max functions,
+         * we are calling a function, which means that we are pushing a new frame onto the stack.
+         * We are also returning a value, which would be assigned to the existing value.
+         *
+         * The min and max values will only change infrequently, so we want to avoid performing
+         * a memcpy when the values haven't changed.
+         */
         if measurement < self.min {
             self.min = measurement;
         }
@@ -97,12 +110,12 @@ fn round_towards_positive(mut n: f64) -> f64 {
     if n < 0.0 {
         // For negative numbers, we adjust the logic to ensure we are "rounding towards positive"
         // We invert the number, perform the rounding, and then invert it back
-        n = -((-n * 10.0).ceil() / 10.0);
+        n = (n * 10.0).ceil();
     } else {
-        n = (n * 10.0).ceil() / 10.0;
+        n = (n * 10.0).round();
     }
 
-    n
+    n / 10.0
 }
 
 #[inline(always)]
