@@ -167,6 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let available_parallelism = available_parallelism * PARALLELISM_CONSTANT;
 
+    // Open the file with Direct I/O. Windows not supported.
     let file = File::options()
         .read(true)
         .mode(libc::O_DIRECT as u32)
