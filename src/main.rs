@@ -79,19 +79,12 @@ impl From<f64> for Measurement {
     }
 }
 
-impl std::fmt::Debug for Measurement {
-    #[inline(always)]
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self)
-    }
-}
-
 impl Display for Measurement {
     #[inline(always)]
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:.1}/{:.1}/{:.1}",
+            "{}/{}/{:.1}",
             self.min,
             self.max,
             self.sum / self.count as f64
