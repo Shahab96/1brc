@@ -7,4 +7,3 @@ edition = "2021"
 codegen-units = 1
 lto = "fat"
 panic = "abort"
-opt-level = 3
