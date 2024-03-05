@@ -3,27 +3,10 @@ use std::{
     fmt::{Display, Formatter},
     fs::File,
     io::{BufWriter, Read, Seek, SeekFrom, Write},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-/* Flip this around to see performance differences on different machines
- * Don't go too high! You'll start getting pointer overlap problems!
- * Use 1 to evenly distribute the data across your cores.
- *
- * This is a constant, so the compiler will optimize it out
- * However, know that as you decrease this number, you will have threads that finish and
- * simply spin down. So as you continue to process your chunks a lot of cpu time is wasted.
- * It's useful to increase this and check what the best value is for your machine.
- *
- * As you increase this value, the chunks will be smaller, and the threads will finish faster.
- * However since you are using more threads than the number of cores you have, it is very likely
- * that one of your cores will simply grab a thread from the cpu scheduler and dedicate itself to that.
- * This means that you will overall waste less cpu time, however if you end up processing faster
- * than you read, then you will still be bottlenecked by IO.
- */
-const PARALLELISM_CONSTANT: usize = 1;
-
-#[derive(Default, Clone, Copy)]
+#[derive(Default)]
 struct Measurement {
     min: f64,
     max: f64,
@@ -118,60 +101,36 @@ fn parse_line<'a>(line: &'a str) -> (&'a str, f64) {
     // if we search from the end of the string we will find the ; significantly faster.
     let (city, measurement) = line.rsplit_once(';').unwrap();
 
-    (
-        city,
-        round_towards_positive(measurement[..].parse().unwrap()),
-    )
+    (city, round_towards_positive(measurement.parse().unwrap()))
 }
 
 #[inline(always)]
 fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measurement)> {
     let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
-
-    #[cfg(debug_assertions)]
     let mut line_count = 0u32;
-
-    #[cfg(debug_assertions)]
     let start = Instant::now();
-
-    #[cfg(debug_assertions)]
-    let mut average = Duration::from_secs(0);
 
     let contents = contents.leak();
     for line in contents.lines() {
-        #[cfg(debug_assertions)]
-        let beginning = Instant::now();
-
         let (city, measurement) = parse_line(line);
 
         let Some(item) = measurements.get_mut(city) else {
             measurements.insert(city, Measurement::from(measurement));
-
-            #[cfg(debug_assertions)]
-            {
-                let end = beginning.elapsed();
-                average += end;
-            }
-
             continue;
         };
 
         item.record(measurement);
 
-        #[cfg(debug_assertions)]
-        {
-            line_count += 1;
-            let end = beginning.elapsed();
-            average += end;
-        }
+        line_count += 1;
     }
 
-    #[cfg(debug_assertions)]
+    let end = start.elapsed();
+
     println!(
         "Processed {} lines in {:?}, averaging {:?} per line",
         line_count,
-        start.elapsed(),
-        average / line_count
+        end,
+        end / line_count
     );
 
     measurements.into_iter()
@@ -187,8 +146,6 @@ fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
      */
     let file_size = file.metadata().unwrap().len() as usize;
     let chunk_size = file_size / available_parallelism;
-
-    #[cfg(debug_assertions)]
     let start = Instant::now();
 
     let temp = &mut [0u8; 100];
@@ -216,7 +173,6 @@ fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
         beginning = end + 1;
     }
 
-    #[cfg(debug_assertions)]
     println!(
         "Memory mapped {} chunks in {:?}",
         mmap.len(),
@@ -230,8 +186,6 @@ fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
 fn process_mapped_lines<'a>(start: i64, end: i64) -> impl Iterator<Item = (&'a str, Measurement)> {
     let chunk_size = (end - start) as usize;
     let mut buf = Vec::with_capacity(chunk_size);
-
-    #[cfg(debug_assertions)]
     let beginning = Instant::now();
 
     let mut file = File::options().read(true).open("measurements.txt").unwrap();
@@ -243,7 +197,6 @@ fn process_mapped_lines<'a>(start: i64, end: i64) -> impl Iterator<Item = (&'a s
     // We know that the input is all valid utf8, so we can use unsafe to avoid the overhead of checking.
     let buf = unsafe { String::from_utf8_unchecked(buf) };
 
-    #[cfg(debug_assertions)]
     println!("Read {} bytes in {:?}", buf.len(), beginning.elapsed());
 
     process_lines(buf)
@@ -255,11 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
      */
     let available_parallelism = std::thread::available_parallelism().unwrap().get();
 
-    #[cfg(debug_assertions)]
-    println!(
-        "Parallelism: {} with parallelism multiplier: {}",
-        available_parallelism, PARALLELISM_CONSTANT
-    );
+    println!("Parallelism: {}", available_parallelism);
 
     // Commenting this out while testing the memory map. Using a parallelism constant of 1 is
     // required for testing to ensure that we don't end up with pointer overlap.
