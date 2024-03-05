@@ -164,7 +164,7 @@ fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
         file.seek(SeekFrom::Start(beginning + chunk_size as u64))
             .unwrap();
         file.read(temp.as_mut_slice()).unwrap();
-        let temp = std::str::from_utf8(temp).unwrap();
+        let temp = unsafe { std::str::from_utf8_unchecked(temp) };
         let newline = temp.find('\n').unwrap() as u64;
         let end = newline + beginning + chunk_size as u64;
         file.seek(SeekFrom::Start(end)).unwrap();
