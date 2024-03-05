@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt::{Display, Formatter},
     fs::File,
-    io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    io::{BufWriter, Read, Seek, SeekFrom, Write},
     time::Instant,
 };
 
@@ -131,11 +131,11 @@ fn parse_line<'a>(line: &'a str) -> (&'a str, f64) {
 
 #[inline(always)]
 fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measurement)> {
-    let contents = contents.leak();
     let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
     let mut line_count = 0u32;
     let start = Instant::now();
 
+    let contents = contents.leak();
     for line in contents.lines() {
         let (city, measurement) = parse_line(line);
 
@@ -154,7 +154,6 @@ fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measure
 
 #[inline(always)]
 fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
-    // Open the file with Direct I/O. Windows not supported.
     let mut file = File::open("measurements.txt").unwrap();
 
     /*
