@@ -120,12 +120,11 @@ fn parse_line<'a>(line: &'a str) -> (&'a str, f64) {
 }
 
 #[inline(always)]
-fn process_lines<'a>(contents: String) -> impl Iterator<Item = (&'a str, Measurement)> {
+fn process_lines<'a>(contents: &'a str) -> impl Iterator<Item = (&'a str, Measurement)> {
     let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
     let mut line_count = 0u32;
     let start = Instant::now();
 
-    let contents = contents.leak();
     for line in contents.lines() {
         let (city, measurement) = parse_line(line);
 
@@ -209,8 +208,10 @@ fn process_mapped_lines<'a>(start: i64, end: i64) -> impl Iterator<Item = (&'a s
 
     take.read_to_end(&mut buf).unwrap();
 
+    let buf = buf.leak();
+
     // We know that the input is all valid utf8, so we can use unsafe to avoid the overhead of checking.
-    let buf = unsafe { String::from_utf8_unchecked(buf) };
+    let buf = unsafe { std::str::from_utf8_unchecked(buf) };
 
     println!("Read {} bytes in {:?}", buf.len(), beginning.elapsed());
 
