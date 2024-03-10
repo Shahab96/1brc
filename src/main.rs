@@ -8,15 +8,15 @@ use std::{
 
 #[derive(Default)]
 struct Measurement {
-    min: f64,
-    max: f64,
-    sum: f64,
+    min: f32,
+    max: f32,
+    sum: f32,
     count: u32,
 }
 
 impl Measurement {
     #[inline(always)]
-    fn record(&mut self, measurement: f64) {
+    fn record(&mut self, measurement: f32) {
         /*
          * This may seem ridiculous, as we can just do something like
          * ```
@@ -57,9 +57,9 @@ impl Measurement {
     }
 }
 
-impl From<f64> for Measurement {
+impl From<f32> for Measurement {
     #[inline(always)]
-    fn from(measurement: f64) -> Self {
+    fn from(measurement: f32) -> Self {
         Self {
             min: measurement,
             max: measurement,
@@ -77,13 +77,13 @@ impl Display for Measurement {
             "{}/{}/{:.1}",
             self.min,
             self.max,
-            self.sum / self.count as f64
+            self.sum / self.count as f32
         )
     }
 }
 
 #[inline(always)]
-fn round_towards_positive(mut n: f64) -> f64 {
+fn round_towards_positive(mut n: f32) -> f32 {
     n *= 10.0;
     if n < 0.0 {
         // For negative numbers we round up, for rounding towards positive
@@ -111,7 +111,7 @@ fn split_line<'a>(line: &'a str) -> (&'a str, &'a str) {
 }
 
 #[inline(always)]
-fn parse_line<'a>(line: &'a str) -> (&'a str, f64) {
+fn parse_line<'a>(line: &'a str) -> (&'a str, f32) {
     // We know that the measurements are all to 1 decimal place. This means that
     // if we search from the end of the string we will find the ; significantly faster.
     let (city, measurement) = split_line(line);
