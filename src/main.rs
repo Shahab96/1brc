@@ -116,7 +116,10 @@ fn parse_line<'a>(line: &'a str) -> (&'a str, f32) {
     // if we search from the end of the string we will find the ; significantly faster.
     let (city, measurement) = split_line(line);
 
-    (city, round_towards_positive(measurement.parse().unwrap()))
+    (
+        city,
+        round_towards_positive(unsafe { measurement.parse().unwrap_unchecked() }),
+    )
 }
 
 #[inline(always)]
@@ -152,13 +155,13 @@ fn process_lines<'a>(contents: &'a str) -> impl Iterator<Item = (&'a str, Measur
 
 #[inline(always)]
 fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
-    let mut file = File::open("measurements.txt").unwrap();
+    let mut file = unsafe { File::open("measurements.txt").unwrap_unchecked() };
 
     /*
      * Tell the compiler to treat the output as a usize
      * This allows us to avoid runtime type conversion.
      */
-    let file_size = file.metadata().unwrap().len() as usize;
+    let file_size = unsafe { file.metadata().unwrap_unchecked().len() } as usize;
     let chunk_size = file_size / available_parallelism;
     let start = Instant::now();
 
@@ -174,18 +177,20 @@ fn memory_map(available_parallelism: usize) -> Vec<(i64, i64)> {
      * This lets us produce a list of tuples that represent the start and end of each chunk
      * without having to perform full file reads.
      */
-    for _ in 0..available_parallelism {
-        file.seek(SeekFrom::Start(beginning + chunk_size as u64))
-            .unwrap();
-        file.read(temp.as_mut_slice()).unwrap();
-        let temp = unsafe { std::str::from_utf8_unchecked(temp) };
-        let newline = temp.find('\n').unwrap() as u64;
-        let end = newline + beginning + chunk_size as u64;
-        file.seek(SeekFrom::Start(end)).unwrap();
+    unsafe {
+        for _ in 0..available_parallelism {
+            file.seek(SeekFrom::Start(beginning + chunk_size as u64))
+                .unwrap_unchecked();
+            file.read(temp.as_mut_slice()).unwrap_unchecked();
+            let temp = std::str::from_utf8_unchecked(temp);
+            let newline = temp.find('\n').unwrap_unchecked() as u64;
+            let end = newline + beginning + chunk_size as u64;
+            file.seek(SeekFrom::Start(end)).unwrap_unchecked();
 
-        mmap.push((beginning as i64, end as i64));
-        beginning = end + 1;
-    }
+            mmap.push((beginning as i64, end as i64));
+            beginning = end + 1;
+        }
+    };
 
     println!(
         "Memory mapped {} chunks in {:?}",
@@ -202,16 +207,21 @@ fn process_mapped_lines<'a>(start: i64, end: i64) -> impl Iterator<Item = (&'a s
     let mut buf = Vec::with_capacity(chunk_size);
     let beginning = Instant::now();
 
-    let mut file = File::options().read(true).open("measurements.txt").unwrap();
-    file.seek(SeekFrom::Start(start as u64)).unwrap();
-    let mut take = file.take(chunk_size as u64);
+    let buf = unsafe {
+        let mut file = File::options()
+            .read(true)
+            .open("measurements.txt")
+            .unwrap_unchecked();
+        file.seek(SeekFrom::Start(start as u64)).unwrap_unchecked();
+        let mut take = file.take(chunk_size as u64);
 
-    take.read_to_end(&mut buf).unwrap();
+        take.read_to_end(&mut buf).unwrap_unchecked();
 
-    let buf = buf.leak();
+        let buf = buf.leak();
 
-    // We know that the input is all valid utf8, so we can use unsafe to avoid the overhead of checking.
-    let buf = unsafe { std::str::from_utf8_unchecked(buf) };
+        // We know that the input is all valid utf8, so we can use unsafe to avoid the overhead of checking.
+        std::str::from_utf8_unchecked(buf)
+    };
 
     println!("Read {} bytes in {:?}", buf.len(), beginning.elapsed());
 
@@ -222,7 +232,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     /*
      * Get the number of available cores on the machine
      */
-    let available_parallelism = std::thread::available_parallelism().unwrap().get();
+    let available_parallelism = unsafe {
+        std::thread::available_parallelism()
+            .unwrap_unchecked()
+            .get()
+    };
 
     println!("Parallelism: {}", available_parallelism);
 
@@ -248,7 +262,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut measurements = HashMap::<&str, Measurement>::with_capacity(10000);
 
     for handle in handles {
-        let result = handle.join().unwrap();
+        let result = unsafe { handle.join().unwrap_unchecked() };
 
         // While we're waiting for the threads to finish, we can perform the aggregation
         for (city, measurement) in result {
@@ -269,16 +283,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut handle = stdout.lock();
     let mut writer = BufWriter::new(&mut handle);
 
-    // Write the buffer to stdout
-    writer.write(b"{").unwrap();
-    for (city, measurement) in results {
-        writer
-            .write_fmt(format_args!("{}={},", city, measurement))
-            .unwrap();
+    unsafe {
+        // Write the buffer to stdout
+        writer.write(b"{").unwrap_unchecked();
+        for (city, measurement) in results {
+            writer
+                .write_fmt(format_args!("{}={},", city, measurement))
+                .unwrap_unchecked();
+        }
+        // Removing the trailing comma
+        writer.write(b"\x08}").unwrap_unchecked();
+        writer.flush().unwrap_unchecked();
     }
-    // Removing the trailing comma
-    writer.write(b"\x08}").unwrap();
-    writer.flush().unwrap();
 
     Ok(())
 }
