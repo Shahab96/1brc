@@ -98,10 +98,10 @@ fn round_towards_positive(mut n: f32) -> f32 {
 #[inline(always)]
 // We're manually implementing the search for our delimiter because we know that the measurements
 // are always to 1 decimal place. This means we can search from the end of the string and skip
-// the last 3 bytes, as they will be the minimum possible measurement eg (0.0).
+// the last 4 bytes, as they will be the minimum possible measurement eg (0.0).
 fn split_line<'a>(line: &'a str) -> (&'a str, &'a str) {
     let bytes = line.as_bytes();
-    let mut i = bytes.len() - 3;
+    let mut i = bytes.len() - 4;
 
     while bytes[i] != b';' {
         i -= 1;
